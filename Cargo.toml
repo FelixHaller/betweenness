@@ -1,0 +1,7 @@
+[package]
+name = "betweenness"
+version = "0.1.0"
+authors = ["Felix Haller <felix@haller.family>"]
+
+[dependencies]
+rand = "0.4.2"
