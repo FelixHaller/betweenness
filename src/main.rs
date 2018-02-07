@@ -1,29 +1,95 @@
 extern crate rand;
+extern crate clap;
 
+use clap::{Arg, App};
 use std::fmt;
 use rand::Rng;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
-/// Anzahl der Zeichen
-const ELEMENTS: usize = 10;
-/// Anzahl der Contraints
-const TRIPLES: usize = 50;
-/// max. Anzahl der Versuche
-const MAXGENERATIONS: usize = 100000;
-/// max. Anzahl der aufeinanderfolgenden Genrationen ohne Verbesserung
-const MAXUNCHANGED: usize = 100;
-/// Individuen in Population
-const POPULATION: usize = 100;
+fn exit(msg: &str) {
+    eprintln!("{}", msg);
+    std::process::exit(1);
+}
 
-type t_genome = [usize; ELEMENTS];
+fn is_usize(s: String) -> Result<(), String> {
+    match s.parse::<usize>() {
+        Ok(u) => Ok(()),
+        Err(_) => Err("Ist kein Integer-Wert".to_string())
+    }
+}
+
+fn main() {
+    let matches = App::new("btwns")
+        .version("1.0")
+        .about("Bearbeitet das Problem MAXIMUM BETWEENNESS mittels evolutionärem Algorithmus")
+        .author("Felix Haller <felix.haller@stud.htwk-leipzig.de>")
+        .arg(Arg::with_name("mutation")
+            .short("m")
+            .value_name("MUTATION")
+            .help("Mutationsstrategie")
+            .possible_values(&["swap", "shift", "invert"])
+            .default_value("swap")
+            .takes_value(true)
+            .required(false))
+        .arg(Arg::with_name("elements")
+            .short("e")
+            .value_name("ELEMENTS")
+            .help("Anzahl der Elemente der Permutation")
+            .takes_value(true)
+            .required(false)
+            .validator(is_usize)
+            .default_value("100"))
+        .arg(Arg::with_name("triples")
+            .short("t")
+            .value_name("TRIPLES")
+            .help("Anzahl der Triples")
+            .takes_value(true)
+            .required(false)
+            .validator(is_usize)
+            .default_value("50"))
+        .arg(Arg::with_name("generations")
+            .short("g")
+            .value_name("GENERATIONS")
+            .help("Anzahl max. Generationen")
+            .takes_value(true)
+            .required(false)
+            .validator(is_usize)
+            .default_value("1000"))
+        .arg(Arg::with_name("unchanged")
+            .short("u")
+            .value_name("UNCHANGED")
+            .help("Anzahl der max. aufeinanderfolgenden Generationen ohne Veränderung")
+            .takes_value(true)
+            .required(false)
+            .validator(is_usize)
+            .default_value("100"))
+        .arg(Arg::with_name("popsize")
+            .short("p")
+            .long("pop")
+            .value_name("POPULATIONSIZE")
+            .help("Populationsgröße festlegen")
+            .takes_value(true)
+            .required(false)
+            .validator(is_usize)
+            .default_value("100"))
+        .get_matches();
+
+    let mutation = matches.value_of("mutation").unwrap();
+    let elements = matches.value_of("elements").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+    let triples = matches.value_of("triples").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+    let generations = matches.value_of("generations").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+    let unchanged = matches.value_of("unchanged").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+    let popsize = matches.value_of("popsize").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+
+    solve_solvable(elements, triples, generations, unchanged, popsize, mutation);
+}
 
 struct Individual {
     id : u32,
     generation: u32,
     // Das Genome
-    genome: t_genome,
+    genome: Vec<usize>,
     // Eine umgekehrte Zuordnung um schnell den Index eines Elements zu erfahren
-    r_genome: t_genome,
 }
 
     impl fmt::Display for Individual {
@@ -33,51 +99,26 @@ struct Individual {
     }
 
     impl Individual {
-        fn new_random() -> Individual {
-            let mut genome = [0usize; ELEMENTS];
-            for i in 0..ELEMENTS {
-                genome[i] = i;
+        fn new_random(elements: usize) -> Individual {
+            let mut genome = Vec::new();
+            for i in 0..elements {
+                genome.push(i);
             }
             rand::thread_rng().shuffle(&mut genome);
 
 
-            Individual{id : 0, generation : 1, genome: genome, r_genome: Individual::create_rgenome(genome)}
-        }
-
-        fn create_rgenome(genome : t_genome) -> t_genome {
-            let mut r_genome = [0usize; ELEMENTS];
-            for (i, element) in genome.iter().enumerate() {
-                r_genome[*element] = i;
-            }
-            r_genome
-        }
-
-        fn refresh_rgenome(&mut self) {
-            self.r_genome = Individual::create_rgenome(self.genome);
-        }
-
-        fn pos2el(&self, pos: usize) -> usize {
-            self.genome[pos]
-        }
-
-        fn el2pos(&self, element: usize) -> usize {
-            self.r_genome[element]
+            Individual{id : 0, generation : 1, genome: genome}
         }
 
         fn mutate(&mut self) {
-            println!("Vorher: {}", self);
 
             // vertauschende Mutation
             let a = rand::thread_rng().gen_range(0, self.genome.len());
             let b = rand::thread_rng().gen_range(0, self.genome.len());
 
-            let s = self.genome[a];
-            self.genome[a] = self.genome[b];
-            self.genome[b] = s;
+            self.genome.swap(a, b);
 
-            self.refresh_rgenome();
 
-            println!("Nachher: {}", self);
             // invertierende Mutation
 
             // verschiebende Mutation (gut geeignet laut Skript)
@@ -89,7 +130,7 @@ struct Individual {
     }
 
 struct BTWNSProblem {
-    rules : HashSet<(usize,usize,usize)>,
+    rules : BTreeSet<(usize,usize,usize)>,
 }
 
     impl fmt::Display for BTWNSProblem {
@@ -99,10 +140,10 @@ struct BTWNSProblem {
     }
 
     impl BTWNSProblem {
-        fn new_solvable_from_individual(solution: &Individual) -> BTWNSProblem {
-            let mut rules : HashSet<(usize,usize,usize)> = HashSet::new();
-            while rules.len() < TRIPLES {
-                let i_c = rand::thread_rng().gen_range(2, ELEMENTS);
+        fn new_solvable_from_individual(solution: &Individual, elements: usize, triples: usize) -> BTWNSProblem {
+            let mut rules = BTreeSet::<(usize,usize,usize)>::new();
+            while rules.len() < triples {
+                let i_c = rand::thread_rng().gen_range(2, elements);
                 let i_b = rand::thread_rng().gen_range(1, i_c);
                 let i_a = rand::thread_rng().gen_range(0, i_b);
                 let c = solution.genome[i_c];
@@ -114,13 +155,21 @@ struct BTWNSProblem {
         }
 
         fn rate(&self, ind: &Individual) -> f64 {
+
+            // genome und r_genome erzeugen um später in konstanter Zeit die Position eines
+            // Elements zu erfahren
+            let mut r_genome = vec![0; ind.genome.len()];
+            for (i, e) in ind.genome.iter().enumerate() {
+                r_genome[*e] = i;
+            }
+
             let mut valid = 0;
             for rule in &self.rules {
                 let a = rule.0;
                 let b = rule.1;
                 let c = rule.2;
-                if      ((ind.el2pos(a) < ind.el2pos(b)) && (ind.el2pos(b) < ind.el2pos(c)))
-                    ||  ((ind.el2pos(a) > ind.el2pos(b)) && (ind.el2pos(b) > ind.el2pos(c)))
+                if      ((r_genome[a] < r_genome[b]) && (r_genome[b] < r_genome[c]))
+                    ||  ((r_genome[a] > r_genome[b]) && (r_genome[b] > r_genome[c]))
                     {
                     valid += 1;
                 }
@@ -129,45 +178,33 @@ struct BTWNSProblem {
         }
     }
 
-fn solve_solvable() {
+fn solve_solvable(elements: usize, triples: usize, generations: usize, unchanged: usize, popsize: usize, mutation: &str) {
     // Permutation erzeugen
-    let solution = Individual::new_random();
+    let solution = Individual::new_random(elements);
     // Regeln erzeugen
-    let problem = BTWNSProblem::new_solvable_from_individual(&solution);
-    println!("Lösung: {:?}", solution.genome);
+    let problem = BTWNSProblem::new_solvable_from_individual(&solution, elements, triples);
+    println!("Lösung: {}", solution);
     println!("Regeln: {}", problem);
 
-    // Ab hier Evoli
-    let mut ind = Individual::new_random();
+    // Evoli
+    let mut individuals = Vec::new();
+    for _ in 0..popsize {
+        individuals.push(Individual::new_random(elements));
+    }
+    let mut ind = Individual::new_random(elements);
     let mut max = 0.0;
-    for x in 0..MAXGENERATIONS {
+    for i in 0..generations {
         let rating = problem.rate(&ind);
         if rating == 1.0 {
-            println!("========================================");
-            println!("Regeln: {}", problem);
-            println!("Lösung: {}", solution);
-            println!("gefundene Lösung: {}", ind);
+            println!("{}", "=".repeat(80));
+            println!("gefundene Lösung ({} Durchläufe): {}", i, ind);
+            max = rating;
             break;
         }
         ind.mutate();
-        println!("{}: {}", x, rating);
-        if rating > max {
-            max = rating;
-        }
+        max = max.max(rating);
 
     }
     println!("Max: {}", max);
 
-}
-
-
-
-//fn solve(problem : BTWNSProblem) {
-//
-//}
-
-
-
-fn main() {
-    solve_solvable();
 }
