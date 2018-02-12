@@ -1,14 +1,15 @@
 extern crate rand;
 extern crate clap;
 extern crate roulette;
+extern crate random_choice;
 
 use clap::{Arg, App};
 use std::fmt;
 use rand::Rng;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 
 use roulette::Roulette;
+use self::random_choice::random_choice;
 
 const DEFAULT_MUTATION: &str = "swap";
 const DEFAULT_ELEMENTS: &str = "100";
@@ -17,8 +18,7 @@ const DEFAULT_GENERATIONS: &str = "1000";
 const DEFAULT_MAXUNCHANGED: &str = "500";
 const DEFAULT_POPULATIONSIZE: &str = "1000";
 
-
-const PARENTSELFAC: f64 = 0.5;
+//const PARENTSELFAC: f64 = 0.5;
 const MUTATIONRATE: f64 = 0.3;
 
 enum MutationStrategy {
@@ -53,8 +53,12 @@ fn is_even_usize(s: String) -> Result<(), String> {
 fn main() {
     let matches = App::new("btwns")
         .version("1.0")
-        .about("Bearbeitet das Problem MAXIMUM BETWEENNESS mittels evolutionärem Algorithmus")
+        .about("Dieses Programm bearbeitet das Problem MAXIMUM BETWEENNESS mittels evolutionärem Algorithmus.")
         .author("Felix Haller <felix.haller@stud.htwk-leipzig.de>")
+        .arg(Arg::with_name("verbose")
+            .short("v")
+            .long("verbose")
+            .help("Mehr Ausgaben."))
         .arg(Arg::with_name("mutation")
             .short("m")
             .value_name("MUTATION")
@@ -116,8 +120,9 @@ fn main() {
     let generations = matches.value_of("generations").unwrap().parse::<usize>().expect("Fehler beim Parsen");
     let maxunchanged = matches.value_of("maxunchanged").unwrap().parse::<usize>().expect("Fehler beim Parsen");
     let popsize = matches.value_of("popsize").unwrap().parse::<usize>().expect("Fehler beim Parsen");
+    let verbose = matches.is_present("verbose");
 
-    solve_solvable(elements, triples, generations, maxunchanged, popsize, mutation);
+    solve_solvable(elements, triples, generations, maxunchanged, popsize, mutation, verbose);
 }
 #[derive(Debug)]
 struct Individual {
@@ -130,15 +135,22 @@ struct Individual {
 
     impl fmt::Display for Individual {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "[{}]: {}", self.generation, format!("{:?}", self.genome))
+            write!(f, "{} | Rating: [{}] | Generation:{}", format!("{:?}", self.genome), self.rating, self.generation)
         }
     }
 
     impl Individual {
+        fn new_dummy() -> Individual {
+            Individual{generation: 0, genome: Vec::new(), rating: 0.0}
+        }
         fn new_random(elements: usize) -> Individual {
             let mut genome = (0..elements).collect::<Vec<usize>>();
             rand::thread_rng().shuffle(&mut genome);
-            Individual{generation : 1, genome: genome, rating: 0.0}
+            Individual{generation: 0, genome: genome, rating: 0.0}
+        }
+
+        fn get_copy(&self) -> Individual {
+            Individual{generation: self.generation, genome: self.genome.to_vec(), rating: self.rating}
         }
 
         fn mutate_swap(&mut self) {
@@ -153,10 +165,11 @@ struct Individual {
         /// invertierende Mutation
         fn mutate_invert(&mut self) {
             let mut rng = rand::thread_rng();
-            let a = rng.gen_range(0, self.genome.len());
-            let b = rng.gen_range(0, self.genome.len());
+            let a = rng.gen_range(0, self.genome.len()-1);
+            let b = rng.gen_range(a+1, self.genome.len());
 
-            self.genome[a..(b+1)].reverse();
+            self.genome[a..b].reverse();
+
         }
 
         /// verschiebende Mutation
@@ -169,9 +182,9 @@ struct Individual {
 
         }
 
-        fn recombine(&self, other : Individual) -> (Individual, Individual) {
+        fn recombine(&self, other : &Individual) -> (Individual, Individual) {
             // ORDNUNGSREKOMBINATION (ohne Klone) (Buch S.29)
-            let new_gen = self.generation + 1;
+            let new_gen = self.generation.max(other.generation) + 1;
             let crosspoint = rand::thread_rng().gen_range(1, self.genome.len()-1);
 
             let mut child1 = Individual{generation: new_gen, genome: self.genome[0..crosspoint].to_vec(), rating: 0.0};
@@ -242,21 +255,16 @@ struct BTWNSProblem {
         }
     }
 
-fn solve_solvable(elements: usize, triples: usize, generations: usize, max_unchanged: usize, popsize: usize, mutation: MutationStrategy) {
+fn solve_solvable(elements: usize, triples: usize, generations: usize, max_unchanged: usize, popsize: usize, mutation: MutationStrategy, verbose: bool) {
     // Permutation erzeugen
     let solution = Individual::new_random(elements);
     // Regeln erzeugen
     let problem = BTWNSProblem::new_solvable_from_individual(&solution, elements, triples);
-    println!("Lösung: {}", solution);
+    println!("mögliche Lösung: {:?}", solution.genome);
     println!("Regeln: {}", problem);
 
     //+++++++++++++++++++++++++++++++++
-    //Zähler für wiederholte beste Werte (Maximum, inGeneration)
-    struct MaxQuality {
-        value: f64,
-        generation: usize,
-    }
-    let mut max_quality = MaxQuality{value: 0.0, generation: 0};
+    let mut best_individual = Individual::new_dummy();
     let mut rng = rand::thread_rng();
 
     //Start-Population zufällig erzeugen
@@ -270,64 +278,44 @@ fn solve_solvable(elements: usize, triples: usize, generations: usize, max_uncha
         //Terminierungsbedingung prüfen
         individual.rating = problem.rate(&individual);
         if individual.rating == 1.0 {
-            exit(format!("Lösung: {}", individual).as_str(), 0);
+            exit(format!("Lösung (in Startpopulation): {:?} | Generation:{}", individual.genome, individual.generation).as_str(), 0);
         }
-        if individual.rating > max_quality.value {
-            max_quality = MaxQuality{value: individual.rating, generation: 0};
+        if individual.rating > best_individual.rating {
+            best_individual = individual.get_copy();
         }
 
 
     }
     //Terminierungsbedingung 1 (Anzahl Generationen)
-    for generation in 1..generations {
+    for generation in 0..generations {
         let mut child_population = Vec::new();
 
-        // Terminierungsbedingung 2 prüfen
-//        if generation - max_quality.generation > max_unchanged {
-//            exit(format!("Keine Verbesserung seit {} Generationen", max_unchanged).as_str(), 1);
-//        }
+        //Terminierungsbedingung 2 prüfen
+        if false {
+            if generation - best_individual.generation > max_unchanged {
+                exit(format!("Keine Verbesserung seit {} Generationen", max_unchanged).as_str(), 1);
+            }
+        }
 
-
+        //Mischen
         rng.shuffle(&mut parent_population);
         
 
         // Elternselektion
         // Alle Individuen sollten Chancen erhalten
-        // Fitness Proportionale Selektion
-        let to_select = popsize/2;
-        let mut parents = Vec::new();
-        let mut selected_parents = Vec::new();
-
-        for individual in parent_population.iter() {
-            let rating = individual.rating;
-            parents.push((
-                Individual {
-                generation: individual.generation,
-                genome: individual.genome.to_vec(),
-                rating: individual.rating,
-            }, rating));
-        }
-        let roulette = Roulette::new(parents);
-        for _ in 0..to_select {
-            let chosen = roulette.next(&mut rng);
-//            println!("chosen: {}", chosen);
-            selected_parents.push(
-                Individual {
-                    generation: chosen.generation,
-                    genome: chosen.genome.to_vec(),
-                    rating: chosen.rating,
-                }
-            );
-        }
-
+        // Fitness Proportionale Selektion oder Stochastisches Universelles Sampling
+        let mut selected_parents = stoch_univ_samp(&parent_population, popsize/2);
 
         // Rekombination
         while let Some(individual) = selected_parents.pop() {
-            let (child1, child2) = individual.recombine(selected_parents.pop().expect("Populationszahl war ungerade!"));
+            let partner = selected_parents.pop().expect("Populationszahl war ungerade!");
+            let (child1, child2) = individual.recombine(&partner);
+            let (child3, child4) = individual.recombine(&partner);
             child_population.push(child1);
             child_population.push(child2);
+            child_population.push(child3);
+            child_population.push(child4);
         }
-
 
         // Mutation der Kinder
         for individual in child_population.iter_mut() {
@@ -346,27 +334,89 @@ fn solve_solvable(elements: usize, triples: usize, generations: usize, max_uncha
             individual.rating = problem.rate(&individual);
             // Terminierungsbedingung "Optimum" prüfen
             if individual.rating == 1.0 {
-                exit(format!("Lösung: {}", individual).as_str(), 0);
+                exit(format!("Lösung (nach Generation {}):\n{:?} | Generation:{}", generation, individual.genome, individual.generation).as_str(), 0);
             }
-            if individual.rating > max_quality.value {
-                max_quality = MaxQuality{value: individual.rating, generation};
+            if individual.rating > best_individual.rating {
+                best_individual = individual.get_copy();
             }
         }
-        println!("Generation: {} \t\t max: {}", generation, max_quality.value);
+        if verbose {
+            println!("[{}] \t\t max: {}", generation, best_individual);
+        }
+        else {
+            eprint!("[{}]:{}\r", generation, best_individual.rating);
+        }
 
 
         // Umweltselektion
-        //Eltern werden durch Kinder vollständig ersetzt
-        parent_population = child_population;
+
+//        parent_population = child_population;
+        parent_population.append(&mut child_population);
+
+        // Q-Stufige zweifache Turnierselektion? (Eltern gegen Kinder oder Gegener jeweils innerhalb der Gruppen?)
+        // ("alte" Individuen, verschwinden meist automatisch mit der Zeit, wenn nach Wahrscheinlichkeiten aussortiert wird)
+        parent_population = q_step_tournament_sel(parent_population, popsize, 3,&mut rng);
+
+
         // gleiche Individuen aussortieren
 //        parent_population.sort_by(|a, b| a.genome.cmp(&b.genome));
 //        parent_population.dedup_by(|a, b| a.genome.eq(&b.genome));
 
-
-        // evtl. Q-Stufige Turnierselektion?
         // rangbasierte Selektion
-        // ("alte" Individuen, verschwinden meist automatisch mit der Zeit, wenn nach Wahrscheinlichkeiten aussortiert wird)
 
     }
+    eprintln!("Keine Lösung gefunden in {} Generationen", generations);
 }
 
+fn q_step_tournament_sel(population : Vec<Individual>, to_select: usize, q: u8, rng: &mut rand::ThreadRng) -> Vec<Individual>{
+    let mut results = Vec::new();
+    let mut champions = Vec::new();
+    for individual in population.iter() {
+        let mut wins = 0;
+        for _ in 0..q {
+            if individual.rating > rng.choose(&population).expect("Population war leer!").rating {
+                wins += 1;
+            }
+        }
+        results.push((
+            individual.get_copy(),
+            wins));
+    }
+    results.sort_by(|a, b| a.1.cmp(&b.1).reverse());
+    for i in 0..to_select {
+        let result = &results[i];
+        champions.push(
+            result.0.get_copy());
+    }
+    champions
+}
+
+fn stoch_univ_samp(parent_population: &Vec<Individual>, to_select: usize) -> Vec<Individual> {
+
+    let weights: Vec<f64> = parent_population.iter().map(|x| x.rating).collect();
+    let choices = random_choice().random_choice_f64(&parent_population, &weights, to_select);
+    let mut selected_parents = Vec::new();
+
+    for choice in choices {
+        selected_parents.push(choice.get_copy());
+    }
+
+    selected_parents
+}
+
+fn fit_prop_sel(parent_population: &Vec<Individual>, to_select: usize, mut rng: &mut rand::ThreadRng) -> Vec<Individual> {
+    let mut parents = Vec::new();
+    let mut selected_parents = Vec::new();
+
+    for individual in parent_population.iter() {
+        let rating = individual.rating;
+        parents.push((individual.get_copy(),rating));
+    }
+    let roulette = Roulette::new(parents);
+    for _ in 0..to_select {
+        let chosen = roulette.next(&mut rng);
+        selected_parents.push(chosen.get_copy());
+    }
+    selected_parents
+
+}
